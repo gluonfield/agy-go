@@ -108,13 +108,15 @@ func (c *SDKClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		PlanText:       out.PlanText,
 	}
 	if c.Store != nil && sessionID != "" {
-		_ = c.Store.Put(Session{
+		if err := c.Store.Put(Session{
 			ID:             sessionID,
 			Cwd:            cwd,
 			ConversationID: resp.ConversationID,
 			SaveDir:        saveDir,
 			UpdatedAt:      time.Now().UTC(),
-		})
+		}); err != nil {
+			return ChatResponse{}, err
+		}
 	}
 	return resp, nil
 }

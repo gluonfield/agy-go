@@ -1,6 +1,7 @@
 package agy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -31,21 +32,28 @@ func NewStore(dir string) (*Store, error) {
 }
 
 func (s *Store) Get(id string) (Session, bool, error) {
-	all, err := s.load()
-	if err != nil {
-		return Session{}, false, err
-	}
-	session, ok := all[id]
-	return session, ok, nil
+	var session Session
+	var ok bool
+	err := s.withSessionsLock(context.Background(), func() error {
+		all, err := s.load()
+		if err != nil {
+			return err
+		}
+		session, ok = all[id]
+		return nil
+	})
+	return session, ok, err
 }
 
 func (s *Store) Put(session Session) error {
-	all, err := s.load()
-	if err != nil {
-		return err
-	}
-	all[session.ID] = session
-	return s.save(all)
+	return s.withSessionsLock(context.Background(), func() error {
+		all, err := s.load()
+		if err != nil {
+			return err
+		}
+		all[session.ID] = session
+		return s.save(all)
+	})
 }
 
 func (s *Store) LastConversationForCwd(cwd string) (string, error) {

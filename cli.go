@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -18,14 +17,13 @@ const defaultTimeout = 5 * time.Minute
 type CLIClient struct {
 	Binary string
 	Store  *Store
-	locks  *cwdLocks
 }
 
 func NewCLIClient(binary string, store *Store) *CLIClient {
 	if strings.TrimSpace(binary) == "" {
 		binary = "agy"
 	}
-	return &CLIClient{Binary: binary, Store: store, locks: newCWDLocks()}
+	return &CLIClient{Binary: binary, Store: store}
 }
 
 func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
@@ -60,7 +58,10 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		}
 	}
 
-	unlock := c.lockCWD(cwd)
+	unlock, err := c.lockCWD(ctx, cwd)
+	if err != nil {
+		return ChatResponse{}, err
+	}
 	defer unlock()
 
 	conversationID := strings.TrimSpace(req.ConversationID)
@@ -155,32 +156,11 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 	return text, nil
 }
 
-func (c *CLIClient) lockCWD(cwd string) func() {
-	if c.locks == nil {
-		return func() {}
+func (c *CLIClient) lockCWD(ctx context.Context, cwd string) (func(), error) {
+	if c.Store == nil {
+		return func() {}, nil
 	}
-	return c.locks.Lock(cwd)
-}
-
-type cwdLocks struct {
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
-}
-
-func newCWDLocks() *cwdLocks {
-	return &cwdLocks{locks: map[string]*sync.Mutex{}}
-}
-
-func (l *cwdLocks) Lock(cwd string) func() {
-	l.mu.Lock()
-	lock := l.locks[cwd]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		l.locks[cwd] = lock
-	}
-	l.mu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+	return c.Store.LockCWD(ctx, cwd)
 }
 
 func timeoutArg(timeout time.Duration) string {
