@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,13 +18,14 @@ const defaultTimeout = 5 * time.Minute
 type CLIClient struct {
 	Binary string
 	Store  *Store
+	locks  *cwdLocks
 }
 
 func NewCLIClient(binary string, store *Store) *CLIClient {
 	if strings.TrimSpace(binary) == "" {
 		binary = "agy"
 	}
-	return &CLIClient{Binary: binary, Store: store}
+	return &CLIClient{Binary: binary, Store: store, locks: newCWDLocks()}
 }
 
 func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
@@ -57,6 +59,9 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 			return ChatResponse{}, err
 		}
 	}
+
+	unlock := c.lockCWD(cwd)
+	defer unlock()
 
 	conversationID := strings.TrimSpace(req.ConversationID)
 	if conversationID == "" && c.Store != nil && strings.TrimSpace(req.SessionID) != "" {
@@ -99,12 +104,14 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 			nextConversationID = id
 		}
 		if strings.TrimSpace(req.SessionID) != "" {
-			_ = c.Store.Put(Session{
+			if err := c.Store.Put(Session{
 				ID:             req.SessionID,
 				Cwd:            cwd,
 				ConversationID: nextConversationID,
 				UpdatedAt:      time.Now().UTC(),
-			})
+			}); err != nil {
+				return ChatResponse{}, err
+			}
 		}
 	}
 
@@ -146,6 +153,34 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 		return text, err
 	}
 	return text, nil
+}
+
+func (c *CLIClient) lockCWD(cwd string) func() {
+	if c.locks == nil {
+		return func() {}
+	}
+	return c.locks.Lock(cwd)
+}
+
+type cwdLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newCWDLocks() *cwdLocks {
+	return &cwdLocks{locks: map[string]*sync.Mutex{}}
+}
+
+func (l *cwdLocks) Lock(cwd string) func() {
+	l.mu.Lock()
+	lock := l.locks[cwd]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		l.locks[cwd] = lock
+	}
+	l.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func timeoutArg(timeout time.Duration) string {
