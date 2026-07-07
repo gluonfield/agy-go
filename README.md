@@ -1,13 +1,10 @@
 # agy-go
 
-Go wrapper for Google Antigravity agent backends.
+Go wrapper for the Google Antigravity CLI.
 
-## Backends
+`CLIClient` shells out to `agy`, reusing the same OAuth/keyring credentials as the Antigravity CLI.
 
-- `CLIClient`: shells out to `agy`, reusing the same OAuth/keyring credentials as the Antigravity CLI.
-- `SDKClient`: shells out to Python and the official `google-antigravity` SDK, using `GEMINI_API_KEY`.
-
-Both implement:
+It implements:
 
 - `ListModels`
 - `AuthStatus`
