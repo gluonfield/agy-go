@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -19,10 +18,8 @@ const defaultTimeout = 5 * time.Minute
 type CLIClient struct {
 	Binary string
 	Store  *Store
-	// NoBrowser keeps headless runs headless: the Antigravity CLI opens a
-	// browser OAuth flow when its silent auth fails, then waits for a pasted
-	// code that a server host can never provide. Shadowing the URL openers on
-	// PATH makes it fail fast with an auth error instead.
+	// NoBrowser blocks the CLI's interactive browser OAuth fallback so
+	// headless runs fail fast with a sign-in error instead.
 	NoBrowser bool
 }
 
@@ -38,7 +35,7 @@ func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
 	if err == nil {
 		return AuthStatus{Authenticated: true, Method: "oauth", Models: models}, nil
 	}
-	if isNotLoggedIn(err) {
+	if IsSignedOut(err) {
 		return AuthStatus{Authenticated: false, Method: "oauth", Reason: "not logged into Antigravity"}, nil
 	}
 	return AuthStatus{}, err
@@ -183,45 +180,45 @@ func timeoutArg(timeout time.Duration) string {
 	return timeout.String()
 }
 
-var noBrowser struct {
-	once sync.Once
-	dir  string
-}
-
 // noBrowserEnv prepends a directory of no-op URL openers (open, xdg-open) to
-// PATH so the Antigravity CLI cannot launch a browser. Returns the inherited
-// environment unchanged if the shim cannot be created (or on Windows, where
-// the CLI opens URLs without consulting PATH).
+// PATH so the Antigravity CLI cannot launch a browser. The shim is rebuilt on
+// every call so a reaped directory or transient write failure never disables
+// suppression for the process lifetime. Returns the inherited environment
+// unchanged if the shim cannot be created (or on Windows, where the CLI opens
+// URLs without consulting PATH).
 func noBrowserEnv() []string {
 	env := os.Environ()
 	if runtime.GOOS == "windows" {
 		return env
 	}
-	noBrowser.once.Do(func() {
-		dir, err := os.MkdirTemp("", "agy-go-no-browser-")
-		if err != nil {
-			return
-		}
-		for _, name := range []string{"open", "xdg-open"} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-				return
-			}
-		}
-		noBrowser.dir = dir
-	})
-	if noBrowser.dir == "" {
+	cache, err := os.UserCacheDir()
+	if err != nil {
 		return env
 	}
-	return append(env, "PATH="+noBrowser.dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := filepath.Join(cache, "agy-go", "no-browser")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return env
+	}
+	for _, name := range []string{"open", "xdg-open"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			return env
+		}
+	}
+	return append(env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func isNotLoggedIn(err error) bool {
+// IsSignedOut reports whether err is the Antigravity CLI failing for lack of
+// a signed-in Google account: "You are not logged into Antigravity", "Please
+// sign in ...", or print mode's "authentication failed or timed out" after
+// its interactive OAuth fallback goes unanswered.
+func IsSignedOut(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not logged into antigravity") ||
-		strings.Contains(msg, "not logged in")
+	return strings.Contains(msg, "not logged in") ||
+		strings.Contains(msg, "please sign in") ||
+		strings.Contains(msg, "authentication failed or timed out")
 }
 
 func DefaultStore() (*Store, error) {

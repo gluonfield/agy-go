@@ -286,9 +286,14 @@ open https://example.com && xdg-open https://example.com && printf 'no browser\n
 	if len(lines) != 3 || lines[2] != "no browser" {
 		t.Fatalf("out = %q", out)
 	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(cache, "agy-go", "no-browser")
 	for _, opener := range lines[:2] {
-		if filepath.Dir(opener) != noBrowser.dir {
-			t.Fatalf("opener %q not shadowed by %q", opener, noBrowser.dir)
+		if filepath.Dir(opener) != shim {
+			t.Fatalf("opener %q not shadowed by %q", opener, shim)
 		}
 	}
 }
