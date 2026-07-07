@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -264,4 +265,30 @@ func fakeAgy(t *testing.T, script string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestCLIClientNoBrowserShadowsURLOpeners(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fake is unix-only")
+	}
+	agy := fakeAgy(t, `#!/bin/sh
+command -v open
+command -v xdg-open
+open https://example.com && xdg-open https://example.com && printf 'no browser\n'
+`)
+	client := NewCLIClient(agy, nil)
+	client.NoBrowser = true
+	out, err := client.run(context.Background(), "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 || lines[2] != "no browser" {
+		t.Fatalf("out = %q", out)
+	}
+	for _, opener := range lines[:2] {
+		if filepath.Dir(opener) != noBrowser.dir {
+			t.Fatalf("opener %q not shadowed by %q", opener, noBrowser.dir)
+		}
+	}
 }

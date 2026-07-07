@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,11 @@ const defaultTimeout = 5 * time.Minute
 type CLIClient struct {
 	Binary string
 	Store  *Store
+	// NoBrowser keeps headless runs headless: the Antigravity CLI opens a
+	// browser OAuth flow when its silent auth fails, then waits for a pasted
+	// code that a server host can never provide. Shadowing the URL openers on
+	// PATH makes it fail fast with an auth error instead.
+	NoBrowser bool
 }
 
 func NewCLIClient(binary string, store *Store) *CLIClient {
@@ -137,6 +144,9 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	if c.NoBrowser {
+		cmd.Env = noBrowserEnv()
+	}
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
@@ -171,6 +181,38 @@ func timeoutArg(timeout time.Duration) string {
 		return fmt.Sprintf("%ds", int(timeout/time.Second))
 	}
 	return timeout.String()
+}
+
+var noBrowser struct {
+	once sync.Once
+	dir  string
+}
+
+// noBrowserEnv prepends a directory of no-op URL openers (open, xdg-open) to
+// PATH so the Antigravity CLI cannot launch a browser. Returns the inherited
+// environment unchanged if the shim cannot be created (or on Windows, where
+// the CLI opens URLs without consulting PATH).
+func noBrowserEnv() []string {
+	env := os.Environ()
+	if runtime.GOOS == "windows" {
+		return env
+	}
+	noBrowser.once.Do(func() {
+		dir, err := os.MkdirTemp("", "agy-go-no-browser-")
+		if err != nil {
+			return
+		}
+		for _, name := range []string{"open", "xdg-open"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				return
+			}
+		}
+		noBrowser.dir = dir
+	})
+	if noBrowser.dir == "" {
+		return env
+	}
+	return append(env, "PATH="+noBrowser.dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func isNotLoggedIn(err error) bool {
