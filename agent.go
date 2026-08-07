@@ -18,7 +18,10 @@ type AuthStatus struct {
 	Models        []Model
 }
 
+// Model mirrors one row of `agy models`: a stable selection ID and the
+// display name. Both are accepted by the CLI's --model flag.
 type Model struct {
+	ID   string
 	Name string
 }
 

@@ -14,8 +14,19 @@ import (
 )
 
 func TestParseModels(t *testing.T) {
-	got := ParseModels("Gemini 3.5 Flash (High)\n\nClaude Sonnet 4.6 (Thinking)\n")
-	if len(got) != 2 || got[0].Name != "Gemini 3.5 Flash (High)" || got[1].Name != "Claude Sonnet 4.6 (Thinking)" {
+	got := ParseModels("gemini-3.6-flash-high\tGemini 3.6 Flash (High)\n\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n")
+	want := []Model{
+		{ID: "gemini-3.6-flash-high", Name: "Gemini 3.6 Flash (High)"},
+		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6 (Thinking)"},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("models = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseModelsWithoutDisplayColumn(t *testing.T) {
+	got := ParseModels("Gemini 3.6 Flash (High)\n")
+	if len(got) != 1 || got[0] != (Model{ID: "Gemini 3.6 Flash (High)", Name: "Gemini 3.6 Flash (High)"}) {
 		t.Fatalf("models = %#v", got)
 	}
 }
@@ -30,7 +41,7 @@ func TestPlanPath(t *testing.T) {
 func TestCLIClientListModels(t *testing.T) {
 	agy := fakeAgy(t, `#!/bin/sh
 if [ "$1" = "models" ]; then
-  printf 'Gemini 3.5 Flash (High)\n'
+  printf 'gemini-3.6-flash-high\tGemini 3.6 Flash (High)\n'
   exit 0
 fi
 exit 1
@@ -40,7 +51,7 @@ exit 1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 1 || models[0].Name != "Gemini 3.5 Flash (High)" {
+	if len(models) != 1 || models[0] != (Model{ID: "gemini-3.6-flash-high", Name: "Gemini 3.6 Flash (High)"}) {
 		t.Fatalf("models = %#v", models)
 	}
 }

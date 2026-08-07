@@ -12,11 +12,15 @@ func ParseModels(output string) []Model {
 	lines := strings.Split(output, "\n")
 	models := make([]Model, 0, len(lines))
 	for _, line := range lines {
-		name := strings.TrimSpace(line)
-		if name == "" {
+		id, name, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		id, name = strings.TrimSpace(id), strings.TrimSpace(name)
+		if id == "" {
 			continue
 		}
-		models = append(models, Model{Name: name})
+		if name == "" {
+			name = id
+		}
+		models = append(models, Model{ID: id, Name: name})
 	}
 	return models
 }
