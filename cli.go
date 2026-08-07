@@ -62,12 +62,6 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		}
 	}
 
-	unlock, err := c.lockCWD(ctx, cwd)
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	defer unlock()
-
 	conversationID := strings.TrimSpace(req.ConversationID)
 	if conversationID == "" && c.Store != nil && strings.TrimSpace(req.SessionID) != "" {
 		if stored, ok, err := c.Store.Get(req.SessionID); err != nil {
@@ -85,7 +79,7 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		message = "/plan " + message
 	}
 
-	args := []string{"--print-timeout", timeoutArg(req.Timeout), "--print", message}
+	args := []string{"--output-format", "json", "--print-timeout", timeoutArg(req.Timeout), "--print", message}
 	if conversationID != "" {
 		args = append([]string{"--conversation", conversationID}, args...)
 	} else {
@@ -102,26 +96,28 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 	if err != nil {
 		return ChatResponse{}, err
 	}
+	result, err := ParsePrintResult(out)
+	if err != nil {
+		return ChatResponse{}, err
+	}
 
-	nextConversationID := conversationID
-	if c.Store != nil {
-		if id, err := c.Store.LastConversationForCwd(cwd); err == nil && strings.TrimSpace(id) != "" {
-			nextConversationID = id
-		}
-		if strings.TrimSpace(req.SessionID) != "" {
-			if err := c.Store.Put(Session{
-				ID:             req.SessionID,
-				Cwd:            cwd,
-				ConversationID: nextConversationID,
-				UpdatedAt:      time.Now().UTC(),
-			}); err != nil {
-				return ChatResponse{}, err
-			}
+	nextConversationID := strings.TrimSpace(result.ConversationID)
+	if nextConversationID == "" {
+		nextConversationID = conversationID
+	}
+	if c.Store != nil && strings.TrimSpace(req.SessionID) != "" {
+		if err := c.Store.Put(Session{
+			ID:             req.SessionID,
+			Cwd:            cwd,
+			ConversationID: nextConversationID,
+			UpdatedAt:      time.Now().UTC(),
+		}); err != nil {
+			return ChatResponse{}, err
 		}
 	}
 
-	resp := ChatResponse{Text: out, ConversationID: nextConversationID}
-	if path := PlanPath(out); path != "" {
+	resp := ChatResponse{Text: result.Response, ConversationID: nextConversationID, Usage: result.Usage}
+	if path := PlanPath(result.Response); path != "" {
 		resp.PlanPath = path
 		if data, err := os.ReadFile(path); err == nil {
 			resp.PlanText = string(data)
@@ -161,13 +157,6 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 		return text, err
 	}
 	return text, nil
-}
-
-func (c *CLIClient) lockCWD(ctx context.Context, cwd string) (func(), error) {
-	if c.Store == nil {
-		return func() {}, nil
-	}
-	return c.Store.LockCWD(ctx, cwd)
 }
 
 func timeoutArg(timeout time.Duration) string {

@@ -2,8 +2,6 @@ package agy
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,10 +10,6 @@ import (
 )
 
 const lockRetryDelay = 50 * time.Millisecond
-
-func (s *Store) LockCWD(ctx context.Context, cwd string) (func(), error) {
-	return s.lock(ctx, "cwd-"+hashString(cwd))
-}
 
 func (s *Store) withSessionsLock(ctx context.Context, fn func() error) error {
 	unlock, err := s.lock(ctx, "sessions")
@@ -43,9 +37,4 @@ func (s *Store) lock(ctx context.Context, name string) (func(), error) {
 		_ = lock.Unlock()
 		_ = lock.Close()
 	}, nil
-}
-
-func hashString(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
 }

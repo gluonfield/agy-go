@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,20 +55,12 @@ exit 1
 	}
 }
 
-func TestCLIClientChatStoresSession(t *testing.T) {
+func TestCLIClientChatReadsJSONEnvelope(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fake is unix-only")
 	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-	cache := filepath.Join(home, ".gemini", "antigravity-cli", "cache")
-	if err := os.MkdirAll(cache, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	agy := fakeAgy(t, `#!/bin/sh
-printf '{"%s":"conv-1"}' "$PWD" > "$HOME/.gemini/antigravity-cli/cache/last_conversations.json"
-printf 'hello\n'
+printf '{"conversation_id":"conv-1","status":"SUCCESS","response":"hello","usage":{"input_tokens":8851,"output_tokens":67,"thinking_tokens":62,"cache_read_tokens":8141,"total_tokens":8918}}'
 `)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -78,7 +69,7 @@ printf 'hello\n'
 	client := NewCLIClient(agy, store)
 	resp, err := client.Chat(context.Background(), ChatRequest{
 		SessionID: "session-1",
-		Cwd:       cwd,
+		Cwd:       t.TempDir(),
 		Message:   "hi",
 		Timeout:   time.Second,
 	})
@@ -88,38 +79,25 @@ printf 'hello\n'
 	if resp.Text != "hello" || resp.ConversationID != "conv-1" {
 		t.Fatalf("resp = %#v", resp)
 	}
+	want := Usage{InputTokens: 8851, OutputTokens: 67, ThinkingTokens: 62, CacheReadTokens: 8141, TotalTokens: 8918}
+	if resp.Usage != want {
+		t.Fatalf("usage = %#v, want %#v", resp.Usage, want)
+	}
 	session, ok, err := store.Get("session-1")
 	if err != nil || !ok || session.ConversationID != "conv-1" {
 		t.Fatalf("stored = %#v ok=%v err=%v", session, ok, err)
 	}
 }
 
-func TestCLIClientSerializesSameCWDConversationCapture(t *testing.T) {
+// The CLI reports the conversation it used in its own response, so concurrent
+// sessions sharing a working directory no longer read each other's state.
+func TestCLIClientConcurrentSameCWDSessionsKeepOwnConversations(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fake is unix-only")
 	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
 	cwd := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity-cli", "cache"), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	agy := fakeAgy(t, `#!/bin/sh
-guard="$PWD/inflight"
-if [ -e "$guard" ]; then
-  echo overlap >&2
-  exit 2
-fi
-touch "$guard"
-trap 'rm -f "$guard"' EXIT
-count_file="$PWD/count"
-n=0
-if [ -f "$count_file" ]; then n=$(cat "$count_file"); fi
-n=$((n + 1))
-printf '%s' "$n" > "$count_file"
-sleep 0.1
-printf '{"%s":"conv-%s"}' "$PWD" "$n" > "$HOME/.gemini/antigravity-cli/cache/last_conversations.json"
-printf 'hello-%s\n' "$n"
+printf '{"conversation_id":"conv-%s","status":"SUCCESS","response":"hello-%s"}' "$$" "$$"
 `)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -127,15 +105,9 @@ printf 'hello-%s\n' "$n"
 	}
 	client := NewCLIClient(agy, store)
 
-	type result struct {
-		session string
-		resp    ChatResponse
-		err     error
-	}
-	results := make(chan result, 2)
 	var wg sync.WaitGroup
+	errs := make(chan error, 2)
 	for _, sessionID := range []string{"session-a", "session-b"} {
-		sessionID := sessionID
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -145,128 +117,32 @@ printf 'hello-%s\n' "$n"
 				Message:   "hi",
 				Timeout:   time.Second,
 			})
-			results <- result{session: sessionID, resp: resp, err: err}
-		}()
-	}
-	wg.Wait()
-	close(results)
-
-	seen := map[string]bool{}
-	for got := range results {
-		if got.err != nil {
-			t.Fatal(got.err)
-		}
-		if got.resp.ConversationID == "" || got.resp.Text == "" {
-			t.Fatalf("empty response: %#v", got.resp)
-		}
-		if seen[got.resp.ConversationID] {
-			t.Fatalf("conversation reused: %#v", got.resp)
-		}
-		seen[got.resp.ConversationID] = true
-		session, ok, err := store.Get(got.session)
-		if err != nil || !ok || session.ConversationID != got.resp.ConversationID {
-			t.Fatalf("stored %s = %#v ok=%v err=%v response=%#v", got.session, session, ok, err, got.resp)
-		}
-	}
-	if len(seen) != 2 {
-		t.Fatalf("conversations = %#v", seen)
-	}
-}
-
-func TestCLIClientSerializesSameCWDAcrossProcesses(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell fake is unix-only")
-	}
-	home := t.TempDir()
-	cwd := t.TempDir()
-	storeDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity-cli", "cache"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	agy := fakeAgy(t, `#!/bin/sh
-guard="$PWD/inflight"
-if [ -e "$guard" ]; then
-  echo overlap >&2
-  exit 2
-fi
-touch "$guard"
-trap 'rm -f "$guard"' EXIT
-count_file="$PWD/count"
-n=0
-if [ -f "$count_file" ]; then n=$(cat "$count_file"); fi
-n=$((n + 1))
-printf '%s' "$n" > "$count_file"
-sleep 0.2
-printf '{"%s":"conv-%s"}' "$PWD" "$n" > "$HOME/.gemini/antigravity-cli/cache/last_conversations.json"
-printf 'hello-%s\n' "$n"
-`)
-
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for _, sessionID := range []string{"session-a", "session-b"} {
-		sessionID := sessionID
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cmd := exec.Command(os.Args[0], "-test.run=TestCLIClientChatHelperProcess")
-			cmd.Env = append(os.Environ(),
-				"AGY_GO_HELPER=chat",
-				"AGY_BIN="+agy,
-				"AGY_CWD="+cwd,
-				"AGY_STORE="+storeDir,
-				"AGY_SESSION="+sessionID,
-				"HOME="+home,
-			)
-			out, err := cmd.CombinedOutput()
 			if err != nil {
-				err = fmt.Errorf("%s: %w: %s", sessionID, err, out)
+				errs <- err
+				return
 			}
-			errs <- err
+			session, ok, storeErr := store.Get(sessionID)
+			if storeErr != nil || !ok || session.ConversationID != resp.ConversationID {
+				errs <- fmt.Errorf("%s stored %#v ok=%v err=%v, want %q", sessionID, session, ok, storeErr, resp.ConversationID)
+			}
 		}()
 	}
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	store, err := NewStore(storeDir)
-	if err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}
 	for _, sessionID := range []string{"session-a", "session-b"} {
-		session, ok, err := store.Get(sessionID)
-		if err != nil || !ok || session.ConversationID == "" {
-			t.Fatalf("stored %s = %#v ok=%v err=%v", sessionID, session, ok, err)
-		}
+		session, _, _ := store.Get(sessionID)
 		if seen[session.ConversationID] {
 			t.Fatalf("conversation reused: %#v", session)
 		}
 		seen[session.ConversationID] = true
 	}
-}
-
-func TestCLIClientChatHelperProcess(t *testing.T) {
-	if os.Getenv("AGY_GO_HELPER") != "chat" {
-		return
+	if len(seen) != 2 {
+		t.Fatalf("conversations = %#v", seen)
 	}
-	store, err := NewStore(os.Getenv("AGY_STORE"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := NewCLIClient(os.Getenv("AGY_BIN"), store)
-	_, err = client.Chat(context.Background(), ChatRequest{
-		SessionID: os.Getenv("AGY_SESSION"),
-		Cwd:       os.Getenv("AGY_CWD"),
-		Message:   "hi",
-		Timeout:   time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Exit(0)
 }
 
 func fakeAgy(t *testing.T, script string) string {

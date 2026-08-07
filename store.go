@@ -56,19 +56,6 @@ func (s *Store) Put(session Session) error {
 	})
 }
 
-func (s *Store) LastConversationForCwd(cwd string) (string, error) {
-	path := filepath.Join(homeDir(), ".gemini", "antigravity-cli", "cache", "last_conversations.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	var byCwd map[string]string
-	if err := json.Unmarshal(data, &byCwd); err != nil {
-		return "", err
-	}
-	return byCwd[cwd], nil
-}
-
 func (s *Store) SessionDir(id string) (string, error) {
 	if id == "" {
 		return "", errors.New("session id is required")
@@ -125,11 +112,4 @@ func (s *Store) save(sessions map[string]Session) error {
 
 func (s *Store) path() string {
 	return filepath.Join(s.Dir, "sessions.json")
-}
-
-func homeDir() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		return home
-	}
-	return ""
 }
