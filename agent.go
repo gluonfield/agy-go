@@ -35,6 +35,8 @@ type ChatRequest struct {
 	Plan                       bool
 	DangerouslySkipPermissions bool
 	Timeout                    time.Duration
+	// OnEvent, when set, receives the CLI's step events as the turn runs.
+	OnEvent func(StreamEvent)
 }
 
 type ChatResponse struct {

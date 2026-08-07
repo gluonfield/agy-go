@@ -1,6 +1,7 @@
 package agy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -14,6 +15,9 @@ import (
 )
 
 const defaultTimeout = 5 * time.Minute
+
+// The CLI writes a turn's whole response on one stream-json line.
+const maxOutputLineBytes = 8 << 20
 
 type CLIClient struct {
 	Binary string
@@ -42,7 +46,7 @@ func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
 }
 
 func (c *CLIClient) ListModels(ctx context.Context) ([]Model, error) {
-	out, err := c.run(ctx, "", 30*time.Second, "models")
+	out, err := c.run(ctx, "", 30*time.Second, nil, "models")
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +83,7 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		message = "/plan " + message
 	}
 
-	args := []string{"--output-format", "json", "--print-timeout", timeoutArg(req.Timeout), "--print", message}
+	args := []string{"--output-format", "stream-json", "--print-timeout", timeoutArg(req.Timeout), "--print", message}
 	if conversationID != "" {
 		args = append([]string{"--conversation", conversationID}, args...)
 	} else {
@@ -92,13 +96,23 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		args = append([]string{"--dangerously-skip-permissions"}, args...)
 	}
 
-	out, err := c.run(ctx, cwd, req.Timeout, args...)
-	if err != nil {
+	var result PrintResult
+	if _, err := c.run(ctx, cwd, req.Timeout, func(line []byte) {
+		event, ok := DecodeStreamEvent(line)
+		if !ok {
+			return
+		}
+		if event.Result != nil {
+			result = *event.Result
+		}
+		if req.OnEvent != nil {
+			req.OnEvent(event)
+		}
+	}, args...); err != nil {
 		return ChatResponse{}, err
 	}
-	result, err := ParsePrintResult(out)
-	if err != nil {
-		return ChatResponse{}, err
+	if result.ConversationID == "" && result.Response == "" {
+		return ChatResponse{}, errors.New("agy reported no result for this turn")
 	}
 
 	nextConversationID := strings.TrimSpace(result.ConversationID)
@@ -126,7 +140,10 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 	return resp, nil
 }
 
-func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, args ...string) (string, error) {
+// run executes the CLI and returns its stdout. onLine, when set, receives each
+// stdout line as it arrives; the slice it is handed is only valid for the
+// duration of the call.
+func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, onLine func([]byte), args ...string) (string, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
@@ -140,11 +157,30 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 	if c.NoBrowser {
 		cmd.Env = noBrowserEnv()
 	}
-	var out bytes.Buffer
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
 	var stderr bytes.Buffer
-	cmd.Stdout = &out
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	var out bytes.Buffer
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(nil, maxOutputLineBytes)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		out.Write(line)
+		out.WriteByte('\n')
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+	scanErr := scanner.Err()
+
+	err = cmd.Wait()
 	text := strings.TrimSpace(out.String())
 	errText := strings.TrimSpace(stderr.String())
 	if runCtx.Err() != nil {
@@ -155,6 +191,9 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 			return text, fmt.Errorf("%w: %s", err, errText)
 		}
 		return text, err
+	}
+	if scanErr != nil {
+		return text, fmt.Errorf("read agy output: %w", scanErr)
 	}
 	return text, nil
 }

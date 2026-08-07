@@ -55,23 +55,30 @@ exit 1
 	}
 }
 
-func TestCLIClientChatReadsJSONEnvelope(t *testing.T) {
+func TestCLIClientChatReadsStreamedTurn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fake is unix-only")
 	}
 	agy := fakeAgy(t, `#!/bin/sh
-printf '{"conversation_id":"conv-1","status":"SUCCESS","response":"hello","usage":{"input_tokens":8851,"output_tokens":67,"thinking_tokens":62,"cache_read_tokens":8141,"total_tokens":8918}}'
+printf '{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/tmp/a"}}}}\n'
+printf '{"event":"result","result":{"conversation_id":"conv-1","status":"SUCCESS","response":"hello","usage":{"input_tokens":8851,"output_tokens":67,"thinking_tokens":62,"cache_read_tokens":8141,"total_tokens":8918}}}\n'
 `)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	client := NewCLIClient(agy, store)
+	var steps []StepUpdate
 	resp, err := client.Chat(context.Background(), ChatRequest{
 		SessionID: "session-1",
 		Cwd:       t.TempDir(),
 		Message:   "hi",
 		Timeout:   time.Second,
+		OnEvent: func(event StreamEvent) {
+			if event.StepUpdate != nil {
+				steps = append(steps, *event.StepUpdate)
+			}
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +94,12 @@ printf '{"conversation_id":"conv-1","status":"SUCCESS","response":"hello","usage
 	if err != nil || !ok || session.ConversationID != "conv-1" {
 		t.Fatalf("stored = %#v ok=%v err=%v", session, ok, err)
 	}
+	if len(steps) != 1 || steps[0].ToolName != "view_file" || steps[0].State != StepStateActive {
+		t.Fatalf("steps = %#v", steps)
+	}
+	if steps[0].ToolInfo == nil || steps[0].ToolInfo.Parameters["AbsolutePath"] != "/tmp/a" {
+		t.Fatalf("tool info = %#v", steps[0].ToolInfo)
+	}
 }
 
 // The CLI reports the conversation it used in its own response, so concurrent
@@ -97,7 +110,7 @@ func TestCLIClientConcurrentSameCWDSessionsKeepOwnConversations(t *testing.T) {
 	}
 	cwd := t.TempDir()
 	agy := fakeAgy(t, `#!/bin/sh
-printf '{"conversation_id":"conv-%s","status":"SUCCESS","response":"hello-%s"}' "$$" "$$"
+printf '{"event":"result","result":{"conversation_id":"conv-%s","status":"SUCCESS","response":"hello-%s"}}\n' "$$" "$$"
 `)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -165,7 +178,7 @@ open https://example.com && xdg-open https://example.com && printf 'no browser\n
 `)
 	client := NewCLIClient(agy, nil)
 	client.NoBrowser = true
-	out, err := client.run(context.Background(), "", time.Minute)
+	out, err := client.run(context.Background(), "", time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
