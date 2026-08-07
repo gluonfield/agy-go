@@ -61,7 +61,7 @@ func TestCLIClientChatReadsStreamedTurn(t *testing.T) {
 	}
 	agy := fakeAgy(t, `#!/bin/sh
 printf '{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/tmp/a"}}}}\n'
-printf '{"event":"result","result":{"conversation_id":"conv-1","status":"SUCCESS","response":"hello","usage":{"input_tokens":8851,"output_tokens":67,"thinking_tokens":62,"cache_read_tokens":8141,"total_tokens":8918}}}\n'
+printf '{"event":"result","result":{"conversation_id":"conv-1","response":"hello","usage":{"input_tokens":8851,"output_tokens":67,"thinking_tokens":62,"cache_read_tokens":8141,"total_tokens":8918}}}\n'
 `)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -110,7 +110,7 @@ func TestCLIClientConcurrentSameCWDSessionsKeepOwnConversations(t *testing.T) {
 	}
 	cwd := t.TempDir()
 	agy := fakeAgy(t, `#!/bin/sh
-printf '{"event":"result","result":{"conversation_id":"conv-%s","status":"SUCCESS","response":"hello-%s"}}\n' "$$" "$$"
+printf '{"event":"result","result":{"conversation_id":"conv-%s","response":"hello-%s"}}\n' "$$" "$$"
 `)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -178,7 +178,7 @@ open https://example.com && xdg-open https://example.com && printf 'no browser\n
 `)
 	client := NewCLIClient(agy, nil)
 	client.NoBrowser = true
-	out, err := client.run(context.Background(), "", time.Minute, nil)
+	out, err := client.output(context.Background(), "", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

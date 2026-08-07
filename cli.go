@@ -46,7 +46,7 @@ func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
 }
 
 func (c *CLIClient) ListModels(ctx context.Context) ([]Model, error) {
-	out, err := c.run(ctx, "", 30*time.Second, nil, "models")
+	out, err := c.output(ctx, "", 30*time.Second, "models")
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 	}
 
 	var result PrintResult
-	if _, err := c.run(ctx, cwd, req.Timeout, func(line []byte) {
+	if err := c.stream(ctx, cwd, req.Timeout, func(line []byte) {
 		event, ok := DecodeStreamEvent(line)
 		if !ok {
 			return
@@ -140,10 +140,19 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 	return resp, nil
 }
 
-// run executes the CLI and returns its stdout. onLine, when set, receives each
-// stdout line as it arrives; the slice it is handed is only valid for the
-// duration of the call.
-func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, onLine func([]byte), args ...string) (string, error) {
+// output runs the CLI and collects its stdout.
+func (c *CLIClient) output(ctx context.Context, cwd string, timeout time.Duration, args ...string) (string, error) {
+	var out strings.Builder
+	err := c.stream(ctx, cwd, timeout, func(line []byte) {
+		out.Write(line)
+		out.WriteByte('\n')
+	}, args...)
+	return strings.TrimSpace(out.String()), err
+}
+
+// stream runs the CLI and hands each stdout line to onLine as it arrives. The
+// slice onLine receives is only valid for the duration of that call.
+func (c *CLIClient) stream(ctx context.Context, cwd string, timeout time.Duration, onLine func([]byte), args ...string) error {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
@@ -159,43 +168,35 @@ func (c *CLIClient) run(ctx context.Context, cwd string, timeout time.Duration, 
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", err
+		return err
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return "", err
+		return err
 	}
 
-	var out bytes.Buffer
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(nil, maxOutputLineBytes)
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		out.Write(line)
-		out.WriteByte('\n')
-		if onLine != nil {
-			onLine(line)
-		}
+		onLine(scanner.Bytes())
 	}
 	scanErr := scanner.Err()
 
 	err = cmd.Wait()
-	text := strings.TrimSpace(out.String())
-	errText := strings.TrimSpace(stderr.String())
 	if runCtx.Err() != nil {
-		return text, runCtx.Err()
+		return runCtx.Err()
 	}
 	if err != nil {
-		if errText != "" {
-			return text, fmt.Errorf("%w: %s", err, errText)
+		if errText := strings.TrimSpace(stderr.String()); errText != "" {
+			return fmt.Errorf("%w: %s", err, errText)
 		}
-		return text, err
+		return err
 	}
 	if scanErr != nil {
-		return text, fmt.Errorf("read agy output: %w", scanErr)
+		return fmt.Errorf("read agy output: %w", scanErr)
 	}
-	return text, nil
+	return nil
 }
 
 func timeoutArg(timeout time.Duration) string {

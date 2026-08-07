@@ -15,7 +15,6 @@ var markdownFileURI = regexp.MustCompile(`\]\(file://([^)]+)\)`)
 // used and the tokens it spent.
 type PrintResult struct {
 	ConversationID string `json:"conversation_id"`
-	Status         string `json:"status"`
 	Response       string `json:"response"`
 	Usage          Usage  `json:"usage"`
 }
