@@ -31,7 +31,7 @@ type ChatRequest struct {
 	ConversationID             string
 	Message                    string
 	Model                      string
-	SystemInstructions         string
+	Effort                     string
 	Plan                       bool
 	DangerouslySkipPermissions bool
 	Timeout                    time.Duration

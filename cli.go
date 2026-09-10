@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,8 @@ type CLIClient struct {
 	// NoBrowser blocks the CLI's interactive browser OAuth fallback so
 	// headless runs fail fast with a sign-in error instead.
 	NoBrowser bool
+	mu        sync.Mutex
+	sessions  map[string]*cliSession
 }
 
 func NewCLIClient(binary string, store *Store) *CLIClient {
@@ -75,61 +78,15 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 		}
 	}
 
-	message := req.Message
-	if req.SystemInstructions != "" {
-		message = "System instructions:\n" + req.SystemInstructions + "\n\nUser request:\n" + message
-	}
-	if req.Plan && !strings.HasPrefix(strings.TrimSpace(message), "/plan") {
-		message = "/plan " + message
-	}
-
-	args := []string{"--output-format", "stream-json", "--print-timeout", timeoutArg(req.Timeout), "--print", message}
-	if conversationID != "" {
-		args = append([]string{"--conversation", conversationID}, args...)
-	} else {
-		args = append([]string{"--new-project"}, args...)
-	}
-	if req.Model != "" {
-		args = append([]string{"--model", req.Model}, args...)
-	}
-	if req.DangerouslySkipPermissions {
-		args = append([]string{"--dangerously-skip-permissions"}, args...)
-	}
-
-	var result PrintResult
-	if err := c.stream(ctx, cwd, req.Timeout, func(line []byte) {
-		event, ok := DecodeStreamEvent(line)
-		if !ok {
-			return
-		}
-		if event.Result != nil {
-			result = *event.Result
-		}
-		if req.OnEvent != nil {
-			req.OnEvent(event)
-		}
-	}, args...); err != nil {
+	result, err := c.prompt(ctx, req, cwd, conversationID)
+	if err != nil {
 		return ChatResponse{}, err
-	}
-	if result.ConversationID == "" && result.Response == "" {
-		return ChatResponse{}, errors.New("agy reported no result for this turn")
 	}
 
 	nextConversationID := strings.TrimSpace(result.ConversationID)
 	if nextConversationID == "" {
 		nextConversationID = conversationID
 	}
-	if c.Store != nil && strings.TrimSpace(req.SessionID) != "" {
-		if err := c.Store.Put(Session{
-			ID:             req.SessionID,
-			Cwd:            cwd,
-			ConversationID: nextConversationID,
-			UpdatedAt:      time.Now().UTC(),
-		}); err != nil {
-			return ChatResponse{}, err
-		}
-	}
-
 	resp := ChatResponse{Text: result.Response, ConversationID: nextConversationID, Usage: result.Usage}
 	if path := PlanPath(result.Response); path != "" {
 		resp.PlanPath = path

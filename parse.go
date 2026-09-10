@@ -14,6 +14,8 @@ var markdownFileURI = regexp.MustCompile(`\]\(file://([^)]+)\)`)
 // stdout. It is the only source that reports the conversation the CLI actually
 // used and the tokens it spent.
 type PrintResult struct {
+	Status         string `json:"status"`
+	Error          string `json:"error"`
 	ConversationID string `json:"conversation_id"`
 	Response       string `json:"response"`
 	Usage          Usage  `json:"usage"`

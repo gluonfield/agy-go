@@ -18,9 +18,10 @@ const (
 // is set; the final "result" line carries the same envelope the non-streaming
 // JSON format returns.
 type StreamEvent struct {
-	Event      string       `json:"event"`
-	StepUpdate *StepUpdate  `json:"step_update"`
-	Result     *PrintResult `json:"result"`
+	ConversationID string       `json:"conversation_id"`
+	Event          string       `json:"event"`
+	StepUpdate     *StepUpdate  `json:"step_update"`
+	Result         *PrintResult `json:"result"`
 }
 
 // StepUpdate reports one step of the CLI's work. Step indices are unique
