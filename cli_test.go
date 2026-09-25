@@ -178,7 +178,7 @@ open https://example.com && xdg-open https://example.com && printf 'no browser\n
 `)
 	client := NewCLIClient(agy, nil)
 	client.NoBrowser = true
-	out, err := client.output(context.Background(), "", time.Minute)
+	out, err := client.output(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

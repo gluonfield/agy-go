@@ -47,7 +47,9 @@ func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
 }
 
 func (c *CLIClient) ListModels(ctx context.Context) ([]Model, error) {
-	out, err := c.output(ctx, "", 30*time.Second, "models")
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := c.output(ctx, "", "models")
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +98,9 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 }
 
 // output runs the CLI and collects its stdout.
-func (c *CLIClient) output(ctx context.Context, cwd string, timeout time.Duration, args ...string) (string, error) {
+func (c *CLIClient) output(ctx context.Context, cwd string, args ...string) (string, error) {
 	var out strings.Builder
-	err := c.stream(ctx, cwd, timeout, func(line []byte) {
+	err := c.stream(ctx, cwd, func(line []byte) {
 		out.Write(line)
 		out.WriteByte('\n')
 	}, args...)
@@ -107,11 +109,8 @@ func (c *CLIClient) output(ctx context.Context, cwd string, timeout time.Duratio
 
 // stream runs the CLI and hands each stdout line to onLine as it arrives. The
 // slice onLine receives is only valid for the duration of that call.
-func (c *CLIClient) stream(ctx context.Context, cwd string, timeout time.Duration, onLine func([]byte), args ...string) error {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, c.Binary, args...)
+func (c *CLIClient) stream(ctx context.Context, cwd string, onLine func([]byte), args ...string) error {
+	cmd := exec.CommandContext(ctx, c.Binary, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -136,8 +135,8 @@ func (c *CLIClient) stream(ctx context.Context, cwd string, timeout time.Duratio
 	scanErr := scanner.Err()
 
 	err = cmd.Wait()
-	if runCtx.Err() != nil {
-		return runCtx.Err()
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if err != nil {
 		if errText := strings.TrimSpace(stderr.String()); errText != "" {
