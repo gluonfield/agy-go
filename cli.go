@@ -1,7 +1,6 @@
 package agy
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -49,7 +48,7 @@ func (c *CLIClient) AuthStatus(ctx context.Context) (AuthStatus, error) {
 func (c *CLIClient) ListModels(ctx context.Context) ([]Model, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := c.output(ctx, "", "models")
+	out, err := c.output(ctx, "models")
 	if err != nil {
 		return nil, err
 	}
@@ -97,57 +96,25 @@ func (c *CLIClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 	return resp, nil
 }
 
-// output runs the CLI and collects its stdout.
-func (c *CLIClient) output(ctx context.Context, cwd string, args ...string) (string, error) {
-	var out strings.Builder
-	err := c.stream(ctx, cwd, func(line []byte) {
-		out.Write(line)
-		out.WriteByte('\n')
-	}, args...)
-	return strings.TrimSpace(out.String()), err
-}
-
-// stream runs the CLI and hands each stdout line to onLine as it arrives. The
-// slice onLine receives is only valid for the duration of that call.
-func (c *CLIClient) stream(ctx context.Context, cwd string, onLine func([]byte), args ...string) error {
+// output runs the CLI and returns its stdout.
+func (c *CLIClient) output(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.Binary, args...)
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
 	if c.NoBrowser {
 		cmd.Env = noBrowserEnv()
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(nil, maxOutputLineBytes)
-	for scanner.Scan() {
-		onLine(scanner.Bytes())
-	}
-	scanErr := scanner.Err()
-
-	err = cmd.Wait()
+	out, err := cmd.Output()
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 	if err != nil {
 		if errText := strings.TrimSpace(stderr.String()); errText != "" {
-			return fmt.Errorf("%w: %s", err, errText)
+			return "", fmt.Errorf("%w: %s", err, errText)
 		}
-		return err
+		return "", err
 	}
-	if scanErr != nil {
-		return fmt.Errorf("read agy output: %w", scanErr)
-	}
-	return nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 // noBrowserEnv prepends a directory of no-op URL openers (open, xdg-open) to
