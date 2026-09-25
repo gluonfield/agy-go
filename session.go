@@ -104,12 +104,12 @@ func (c *CLIClient) prompt(ctx context.Context, req ChatRequest, cwd, conversati
 		session.options = options
 	}
 	process := session.process
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
+	turnCtx := ctx
+	if req.Timeout > 0 {
+		var cancel context.CancelFunc
+		turnCtx, cancel = context.WithTimeout(ctx, req.Timeout)
+		defer cancel()
 	}
-	turnCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	stopOnCancel := context.AfterFunc(turnCtx, process.cancel)
 	defer stopOnCancel()
 	input := struct {
@@ -173,7 +173,10 @@ func (c *CLIClient) prompt(ctx context.Context, req ChatRequest, cwd, conversati
 }
 
 func (c *CLIClient) startSession(ctx context.Context, options sessionOptions, conversationID string) (*cliProcess, error) {
-	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--print-timeout", timeoutArg(options.timeout)}
+	args := []string{"--input-format", "stream-json", "--output-format", "stream-json"}
+	if options.timeout > 0 {
+		args = append(args, "--print-timeout", options.timeout.String())
+	}
 	if conversationID != "" {
 		args = append(args, "--conversation", conversationID)
 	} else {

@@ -117,3 +117,19 @@ printf '{"event":"result","result":{"status":"SUCCESS","conversation_id":"native
 		t.Fatalf("restart idle native process = %#v, %v", response, err)
 	}
 }
+
+func TestPrintTimeoutIsPassedOnlyWhenConfigured(t *testing.T) {
+	binary := fakeAgy(t, `#!/bin/sh
+read input
+printf '{"event":"result","result":{"status":"SUCCESS","response":"%s"}}\n' "$*"
+`)
+	client := NewCLIClient(binary, nil)
+	unlimited, err := client.Chat(t.Context(), ChatRequest{Cwd: t.TempDir(), Message: "hi"})
+	if err != nil || strings.Contains(unlimited.Text, "--print-timeout") {
+		t.Fatalf("unconfigured timeout args = %q, %v", unlimited.Text, err)
+	}
+	limited, err := client.Chat(t.Context(), ChatRequest{Cwd: t.TempDir(), Message: "hi", Timeout: 90 * time.Second})
+	if err != nil || !strings.Contains(limited.Text, "--print-timeout 1m30s") {
+		t.Fatalf("configured timeout args = %q, %v", limited.Text, err)
+	}
+}

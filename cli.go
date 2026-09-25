@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-const defaultTimeout = 5 * time.Minute
-
 // The CLI writes a turn's whole response on one stream-json line.
 const maxOutputLineBytes = 8 << 20
 
@@ -110,9 +108,6 @@ func (c *CLIClient) output(ctx context.Context, cwd string, timeout time.Duratio
 // stream runs the CLI and hands each stdout line to onLine as it arrives. The
 // slice onLine receives is only valid for the duration of that call.
 func (c *CLIClient) stream(ctx context.Context, cwd string, timeout time.Duration, onLine func([]byte), args ...string) error {
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -154,16 +149,6 @@ func (c *CLIClient) stream(ctx context.Context, cwd string, timeout time.Duratio
 		return fmt.Errorf("read agy output: %w", scanErr)
 	}
 	return nil
-}
-
-func timeoutArg(timeout time.Duration) string {
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-	if timeout%time.Second == 0 {
-		return fmt.Sprintf("%ds", int(timeout/time.Second))
-	}
-	return timeout.String()
 }
 
 // noBrowserEnv prepends a directory of no-op URL openers (open, xdg-open) to
